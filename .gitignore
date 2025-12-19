@@ -1,0 +1,5 @@
+config.txt
+proxies.txt
+*.db
+__pycache__/
+*.pyc
