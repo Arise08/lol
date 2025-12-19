@@ -335,8 +335,7 @@ class AsyncServerDebugger:
             force_close=True,  # Force close connections for faster cleanup
             enable_cleanup_closed=True,
             ssl=False,  # Disable SSL verification for faster connections
-            keepalive_timeout=5,  # Shorter keepalive
-            enable_cleanup_closed=True
+            keepalive_timeout=5  # Shorter keepalive
         )
         
         print(f"🚀 Starting {len(tasks)} tests with {max_concurrent} concurrent requests...\n")
