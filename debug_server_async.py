@@ -332,10 +332,9 @@ class AsyncServerDebugger:
             limit=max_concurrent * 2,  # Double the limit for more connections
             limit_per_host=200,  # Increased per-host limit
             ttl_dns_cache=60,  # Shorter cache for faster rotation
-            force_close=True,  # Force close connections for faster cleanup
+            force_close=True,  # Force close connections for faster cleanup (can't use keepalive_timeout with this)
             enable_cleanup_closed=True,
-            ssl=False,  # Disable SSL verification for faster connections
-            keepalive_timeout=5  # Shorter keepalive
+            ssl=False  # Disable SSL verification for faster connections
         )
         
         print(f"🚀 Starting {len(tasks)} tests with {max_concurrent} concurrent requests...\n")
