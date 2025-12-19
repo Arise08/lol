@@ -310,9 +310,17 @@ class AsyncServerDebugger:
                         eta = remaining / rate if rate > 0 else 0
                         success_count = len([r for r in results if r.get('success')])
                         error_count = len([r for r in results if not r.get('success')])
+                        
+                        # Show error breakdown
+                        error_types = defaultdict(int)
+                        for r in results:
+                            if not r.get('success') and r.get('error'):
+                                error_types[r['error']] += 1
+                        top_error = max(error_types.items(), key=lambda x: x[1]) if error_types else ('None', 0)
+                        
                         print(f"⏳ Progress: {completed}/{total_tests} ({completed*100//total_tests}%) | "
                               f"Rate: {rate:.0f}/s | ETA: {eta:.0f}s | "
-                              f"✅ Success: {success_count} | ❌ Errors: {error_count}", end='\r')
+                              f"✅ Success: {success_count} | ❌ Errors: {error_count} | Top: {top_error[0][:30]} ({top_error[1]})", end='\r')
                 except Exception as e:
                     # Silently catch and log exceptions to prevent spam
                     completed += 1
@@ -355,7 +363,31 @@ class AsyncServerDebugger:
         
         elapsed_time = time.time() - start_time
         print(f"\n✅ Completed {completed} tests in {elapsed_time:.1f} seconds")
-        print(f"⚡ Average rate: {completed/elapsed_time:.0f} requests/second\n")
+        print(f"⚡ Average rate: {completed/elapsed_time:.0f} requests/second")
+        
+        # Quick error summary
+        if results:
+            error_summary = defaultdict(int)
+            status_summary = defaultdict(int)
+            for r in results:
+                if r.get('error'):
+                    error_summary[r['error']] += 1
+                if r.get('status_code') is not None:
+                    status_summary[r['status_code']] += 1
+            
+            print(f"\n📊 Quick Error Summary:")
+            print(f"   Total Results: {len(results)}")
+            print(f"   Successful: {len([r for r in results if r.get('success')])}")
+            print(f"   Failed: {len([r for r in results if not r.get('success')])}")
+            if error_summary:
+                print(f"\n   Top 5 Errors:")
+                for error_type, count in sorted(error_summary.items(), key=lambda x: x[1], reverse=True)[:5]:
+                    print(f"      {error_type[:60]}: {count}")
+            if status_summary:
+                print(f"\n   Status Codes:")
+                for status, count in sorted(status_summary.items()):
+                    print(f"      {status}: {count}")
+            print()
         
         return results
     
