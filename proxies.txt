@@ -1,0 +1,8 @@
+# Add your proxies here, one per line
+# Formats supported:
+# host:port:user:pass
+# user:pass@host:port
+# host:port (no auth)
+
+# Example:
+# residential.proxy.com:10000:user123:pass456
