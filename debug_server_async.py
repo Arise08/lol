@@ -166,55 +166,55 @@ class AsyncServerDebugger:
                     timeout=timeout,
                     ssl=False
                 ) as response:
-                result['response_time'] = time.time() - start_time
-                result['status_code'] = response.status
-                result['response_headers'] = dict(response.headers)
-                
-                if response.status == 200:
-                    try:
-                        data = await response.json()
-                        result['response_body'] = data
-                        result['success'] = True
-                        
-                        join_script = data.get('joinScript', {})
-                        if join_script:
-                            udmux_endpoints = join_script.get('UdmuxEndpoints')
-                            if udmux_endpoints:
-                                result['is_udmux'] = True
-                            else:
-                                machine_address = join_script.get('MachineAddress', '')
-                                server_port = join_script.get('ServerPort', 0)
-                                if machine_address and server_port:
-                                    result['is_non_udmux'] = True
-                                    result['server_info'] = {
-                                        'machine_address': machine_address,
-                                        'server_port': server_port,
-                                        'full_address': f"{machine_address}:{server_port}"
-                                    }
-                    except Exception as e:
-                        result['error'] = f'JSON decode error: {str(e)[:100]}'
-                        result['response_body'] = (await response.text())[:500]
-                elif response.status == 429:
-                    result['error'] = 'Rate Limited'
-                    result['retry_after'] = response.headers.get('Retry-After', 'Unknown')
-                elif response.status == 400:
-                    result['error'] = 'Bad Request'
-                    try:
-                        result['response_body'] = await response.json()
-                    except:
-                        result['response_body'] = (await response.text())[:500]
-                elif response.status == 403:
-                    result['error'] = 'Forbidden'
-                elif response.status == 404:
-                    result['error'] = 'Server Not Found'
-                elif response.status == 500:
-                    result['error'] = 'Server Error'
-                else:
-                    result['error'] = f'HTTP {response.status}'
-                    try:
-                        result['response_body'] = (await response.text())[:500]
-                    except:
-                        pass
+                    result['response_time'] = time.time() - start_time
+                    result['status_code'] = response.status
+                    result['response_headers'] = dict(response.headers)
+                    
+                    if response.status == 200:
+                        try:
+                            data = await response.json()
+                            result['response_body'] = data
+                            result['success'] = True
+                            
+                            join_script = data.get('joinScript', {})
+                            if join_script:
+                                udmux_endpoints = join_script.get('UdmuxEndpoints')
+                                if udmux_endpoints:
+                                    result['is_udmux'] = True
+                                else:
+                                    machine_address = join_script.get('MachineAddress', '')
+                                    server_port = join_script.get('ServerPort', 0)
+                                    if machine_address and server_port:
+                                        result['is_non_udmux'] = True
+                                        result['server_info'] = {
+                                            'machine_address': machine_address,
+                                            'server_port': server_port,
+                                            'full_address': f"{machine_address}:{server_port}"
+                                        }
+                        except Exception as e:
+                            result['error'] = f'JSON decode error: {str(e)[:100]}'
+                            result['response_body'] = (await response.text())[:500]
+                    elif response.status == 429:
+                        result['error'] = 'Rate Limited'
+                        result['retry_after'] = response.headers.get('Retry-After', 'Unknown')
+                    elif response.status == 400:
+                        result['error'] = 'Bad Request'
+                        try:
+                            result['response_body'] = await response.json()
+                        except:
+                            result['response_body'] = (await response.text())[:500]
+                    elif response.status == 403:
+                        result['error'] = 'Forbidden'
+                    elif response.status == 404:
+                        result['error'] = 'Server Not Found'
+                    elif response.status == 500:
+                        result['error'] = 'Server Error'
+                    else:
+                        result['error'] = f'HTTP {response.status}'
+                        try:
+                            result['response_body'] = (await response.text())[:500]
+                        except:
+                            pass
             except aiohttp.ClientProxyConnectionError:
                 result['error'] = 'Proxy Connection Error'
                 result['response_time'] = time.time() - start_time
