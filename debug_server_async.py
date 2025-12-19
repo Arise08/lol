@@ -5,8 +5,13 @@ from datetime import datetime
 import json
 import re
 import os
+import warnings
 from collections import defaultdict
 from typing import List, Dict, Optional
+
+# Suppress SSL warnings
+warnings.filterwarnings('ignore', category=RuntimeWarning)
+asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy() if os.name == 'nt' else asyncio.DefaultEventLoopPolicy())
 
 class AsyncServerDebugger:
     def __init__(self):
@@ -15,6 +20,7 @@ class AsyncServerDebugger:
         self.results = []
         self.completed = 0
         self.lock = asyncio.Lock()
+        self.current_job_id = None  # Store job_id for analyze_results
         
     def load_all_proxies(self):
         """Load all proxies including SOCKS5"""
@@ -164,7 +170,7 @@ class AsyncServerDebugger:
                     headers=headers,
                     proxy=proxy_url,
                     timeout=timeout,
-                    ssl=False
+                    ssl=False  # Disable SSL verification
                 ) as response:
                     result['response_time'] = time.time() - start_time
                     result['status_code'] = response.status
@@ -215,24 +221,42 @@ class AsyncServerDebugger:
                             result['response_body'] = (await response.text())[:500]
                         except:
                             pass
-            except aiohttp.ClientProxyConnectionError:
+            except aiohttp.ClientProxyConnectionError as e:
                 result['error'] = 'Proxy Connection Error'
+                result['response_time'] = time.time() - start_time
+            except aiohttp.ClientConnectionError as e:
+                # Catch SSL errors and connection errors silently
+                error_str = str(e)
+                if 'SSL' in error_str or 'application data after close notify' in error_str:
+                    result['error'] = 'SSL Connection Error'
+                else:
+                    result['error'] = f'Connection Error: {error_str[:100]}'
                 result['response_time'] = time.time() - start_time
                         
         except asyncio.TimeoutError:
             result['error'] = 'Timeout'
             result['response_time'] = time.time() - start_time
         except aiohttp.ClientConnectorError as e:
-            result['error'] = f'Connection Error: {str(e)[:100]}'
+            error_str = str(e)
+            if 'SSL' in error_str or 'application data after close notify' in error_str:
+                result['error'] = 'SSL Connection Error'
+            else:
+                result['error'] = f'Connection Error: {error_str[:100]}'
             result['response_time'] = time.time() - start_time
         except Exception as e:
-            result['error'] = f'Exception: {str(e)[:100]}'
+            error_str = str(e)
+            if 'SSL' in error_str or 'application data after close notify' in error_str:
+                result['error'] = 'SSL Error'
+            else:
+                result['error'] = f'Exception: {error_str[:100]}'
             result['response_time'] = time.time() - start_time
         
         return result
     
     async def run_debug(self, game_id: str, job_id: str, num_attempts: int = 1, max_concurrent: int = 500):
         """Run debug test with all proxy-cookie combinations (ULTRA AGGRESSIVE ASYNC)"""
+        self.current_job_id = job_id  # Store for analyze_results
+        
         print(f"\n{'='*80}")
         print(f"🔍 SERVER DEBUGGER (ULTRA AGGRESSIVE ASYNC MODE)")
         print(f"{'='*80}")
@@ -280,13 +304,14 @@ class AsyncServerDebugger:
                           f"Rate: {rate:.0f}/s | ETA: {eta:.0f}s | "
                           f"✅ Success: {success_count} | ❌ Errors: {error_count}", end='\r')
         
-        # Create aiohttp session with connection pooling
+        # Create aiohttp session with connection pooling and SSL handling
         connector = aiohttp.TCPConnector(
             limit=max_concurrent,
             limit_per_host=50,
             ttl_dns_cache=300,
             force_close=False,
-            enable_cleanup_closed=True
+            enable_cleanup_closed=True,
+            ssl=False  # Disable SSL verification for faster connections
         )
         
         print(f"🚀 Starting {len(tasks)} tests with {max_concurrent} concurrent requests...\n")
@@ -295,8 +320,9 @@ class AsyncServerDebugger:
             # Create all tasks
             coroutines = [worker_with_semaphore(session, task) for task in tasks]
             
-            # Run all tasks concurrently
-            await asyncio.gather(*coroutines)
+            # Run all tasks concurrently with exception handling
+            # Use return_exceptions=True to prevent unhandled exceptions from stopping everything
+            await asyncio.gather(*coroutines, return_exceptions=True)
         
         elapsed_time = time.time() - start_time
         print(f"\n✅ Completed {completed} tests in {elapsed_time:.1f} seconds")
@@ -440,6 +466,7 @@ class AsyncServerDebugger:
             print()
         
         # Save detailed results to file
+        job_id = self.current_job_id if self.current_job_id else 'unknown'
         filename = f"debug_results_{job_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, default=str)
