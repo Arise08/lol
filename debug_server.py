@@ -118,7 +118,7 @@ class ServerDebugger:
         return []
     
     def create_session(self, proxy_config, cookie):
-        """Create a requests session with proxy and cookie"""
+        """Create a requests session with proxy and cookie (AGGRESSIVE)"""
         session = requests.Session()
         
         # Setup proxy based on type
@@ -131,9 +131,10 @@ class ServerDebugger:
             proxy_url = f"http://{proxy_config['user']}:{proxy_config['pass']}@{proxy_config['host']}:{proxy_config['port']}"
             session.proxies = {'http': proxy_url, 'https': proxy_url}
         
+        # Aggressive adapter settings
         adapter = requests.adapters.HTTPAdapter(
-            pool_connections=1,
-            pool_maxsize=1,
+            pool_connections=10,
+            pool_maxsize=20,
             max_retries=0,
             pool_block=False
         )
@@ -184,7 +185,7 @@ class ServerDebugger:
             response = session.post(
                 'https://gamejoin.roblox.com/v1/join-game-instance',
                 json=payload,
-                timeout=5
+                timeout=3  # Reduced timeout for faster failures
             )
             
             result['response_time'] = time.time() - start_time
@@ -253,10 +254,10 @@ class ServerDebugger:
         
         return result
     
-    def run_debug(self, game_id, job_id, num_attempts=1):
-        """Run debug test with all proxy-cookie combinations"""
+    def run_debug(self, game_id, job_id, num_attempts=1, max_workers=200):
+        """Run debug test with all proxy-cookie combinations (AGGRESSIVE PARALLEL)"""
         print(f"\n{'='*80}")
-        print(f"🔍 SERVER DEBUGGER")
+        print(f"🔍 SERVER DEBUGGER (AGGRESSIVE MODE)")
         print(f"{'='*80}")
         print(f"Game ID: {game_id}")
         print(f"Job ID: {job_id}")
@@ -264,33 +265,50 @@ class ServerDebugger:
         print(f"Cookies: {len(self.cookies)}")
         print(f"Total Combinations: {len(self.proxy_pool) * len(self.cookies)}")
         print(f"Attempts per combination: {num_attempts}")
+        print(f"Max Workers (Parallel): {max_workers}")
         print(f"{'='*80}\n")
         
         results = []
         total_tests = len(self.proxy_pool) * len(self.cookies) * num_attempts
-        completed = 0
-        
+        completed = [0]  # Use list for thread-safe counter
         start_time = time.time()
+        lock = threading.Lock()
         
-        # Test all combinations
+        # Prepare all test tasks
+        tasks = []
         for proxy in self.proxy_pool:
             for cookie_idx, cookie in enumerate(self.cookies):
                 for attempt in range(1, num_attempts + 1):
-                    result = self.test_server(game_id, job_id, proxy, cookie, cookie_idx + 1, attempt)
-                    if result:
-                        results.append(result)
-                    
-                    completed += 1
-                    if completed % 10 == 0:
-                        elapsed = time.time() - start_time
-                        rate = completed / elapsed if elapsed > 0 else 0
-                        remaining = total_tests - completed
-                        eta = remaining / rate if rate > 0 else 0
-                        print(f"⏳ Progress: {completed}/{total_tests} ({completed*100//total_tests}%) | "
-                              f"Rate: {rate:.1f}/s | ETA: {eta:.0f}s", end='\r')
+                    tasks.append((game_id, job_id, proxy, cookie, cookie_idx + 1, attempt))
+        
+        def worker(task):
+            game_id, job_id, proxy, cookie, cookie_num, attempt_num = task
+            result = self.test_server(game_id, job_id, proxy, cookie, cookie_num, attempt_num)
+            
+            with lock:
+                completed[0] += 1
+                if result:
+                    results.append(result)
+                
+                if completed[0] % 50 == 0 or completed[0] == total_tests:
+                    elapsed = time.time() - start_time
+                    rate = completed[0] / elapsed if elapsed > 0 else 0
+                    remaining = total_tests - completed[0]
+                    eta = remaining / rate if rate > 0 else 0
+                    print(f"⏳ Progress: {completed[0]}/{total_tests} ({completed[0]*100//total_tests}%) | "
+                          f"Rate: {rate:.0f}/s | ETA: {eta:.0f}s | "
+                          f"Success: {len([r for r in results if r.get('success')])} | "
+                          f"Errors: {len([r for r in results if not r.get('success')])}", end='\r')
+        
+        # Run all tasks in parallel
+        print(f"🚀 Starting {len(tasks)} tests with {max_workers} parallel workers...\n")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            executor.map(worker, tasks)
         
         elapsed_time = time.time() - start_time
-        print(f"\n✅ Completed {completed} tests in {elapsed_time:.1f} seconds\n")
+        print(f"\n✅ Completed {completed[0]} tests in {elapsed_time:.1f} seconds")
+        print(f"⚡ Average rate: {completed[0]/elapsed_time:.0f} requests/second\n")
         
         return results
     
@@ -473,8 +491,13 @@ def main():
     num_attempts_input = input("🔄 Number of attempts per combination (default 1): ").strip()
     num_attempts = int(num_attempts_input) if num_attempts_input.isdigit() else 1
     
-    print(f"\n🚀 Starting debug test...")
-    print(f"   This will test {len(debugger.proxy_pool) * len(cookies) * num_attempts} combinations")
+    max_workers_input = input(f"⚡ Max parallel workers (default 200, recommended 100-300): ").strip()
+    max_workers = int(max_workers_input) if max_workers_input.isdigit() else 200
+    
+    print(f"\n🚀 Starting AGGRESSIVE debug test...")
+    print(f"   Total tests: {len(debugger.proxy_pool) * len(cookies) * num_attempts}")
+    print(f"   Parallel workers: {max_workers}")
+    print(f"   Expected speed: ~{max_workers * 2}-{max_workers * 5} requests/second")
     
     confirm = input("\n⚠️ Continue? (y/n): ").strip().lower()
     if confirm != 'y':
@@ -482,7 +505,7 @@ def main():
         return
     
     # Run debug
-    results = debugger.run_debug(game_id, job_id, num_attempts)
+    results = debugger.run_debug(game_id, job_id, num_attempts, max_workers)
     
     # Analyze results
     debugger.analyze_results(results)
