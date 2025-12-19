@@ -293,12 +293,12 @@ class AsyncServerDebugger:
         semaphore = asyncio.Semaphore(max_concurrent)
         
         async def worker_with_semaphore(session, task):
+            nonlocal completed, results  # Declare nonlocal at the start of the function
             async with semaphore:
                 try:
                     game_id, job_id, proxy, cookie, cookie_num, attempt_num = task
                     result = await self.test_server(session, game_id, job_id, proxy, cookie, cookie_num, attempt_num)
                     
-                    nonlocal completed
                     completed += 1
                     results.append(result)
                     
@@ -315,7 +315,6 @@ class AsyncServerDebugger:
                               f"✅ Success: {success_count} | ❌ Errors: {error_count}", end='\r')
                 except Exception as e:
                     # Silently catch and log exceptions to prevent spam
-                    nonlocal completed
                     completed += 1
                     proxy_id = task[2]['id'] if len(task) > 2 and isinstance(task[2], dict) else 'unknown'
                     cookie_num = task[4] if len(task) > 4 else 0
