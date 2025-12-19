@@ -1,6 +1,0 @@
-requests>=2.31.0
-pysocks>=1.7.1
-requests[socks]>=2.31.0
-psutil>=5.9.0
-aiohttp>=3.9.0
-aiosocks>=0.7.1
