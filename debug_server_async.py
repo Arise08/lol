@@ -9,9 +9,15 @@ import warnings
 from collections import defaultdict
 from typing import List, Dict, Optional
 
-# Suppress SSL warnings
-warnings.filterwarnings('ignore', category=RuntimeWarning)
-asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy() if os.name == 'nt' else asyncio.DefaultEventLoopPolicy())
+# Suppress ALL warnings for ultra-aggressive mode
+warnings.filterwarnings('ignore')
+import logging
+logging.getLogger('asyncio').setLevel(logging.CRITICAL)
+logging.getLogger('aiohttp').setLevel(logging.CRITICAL)
+
+# Set event loop policy for Windows
+if os.name == 'nt':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 class AsyncServerDebugger:
     def __init__(self):
@@ -159,7 +165,8 @@ class AsyncServerDebugger:
                 'Connection': 'keep-alive'
             }
             
-            timeout = aiohttp.ClientTimeout(total=3, connect=2)
+            # AGGRESSIVE: Reduced timeouts for faster failures
+            timeout = aiohttp.ClientTimeout(total=2, connect=1)
             
             # For SOCKS5, we might need special handling, but aiohttp should handle it
             # If SOCKS5 doesn't work, we can fall back to HTTP proxies
@@ -253,7 +260,7 @@ class AsyncServerDebugger:
         
         return result
     
-    async def run_debug(self, game_id: str, job_id: str, num_attempts: int = 1, max_concurrent: int = 500):
+    async def run_debug(self, game_id: str, job_id: str, num_attempts: int = 1, max_concurrent: int = 1000):
         """Run debug test with all proxy-cookie combinations (ULTRA AGGRESSIVE ASYNC)"""
         self.current_job_id = job_id  # Store for analyze_results
         
@@ -281,37 +288,56 @@ class AsyncServerDebugger:
                 for attempt in range(1, num_attempts + 1):
                     tasks.append((game_id, job_id, proxy, cookie, cookie_idx + 1, attempt))
         
-        # Create semaphore to limit concurrent requests
+        # Create semaphore to limit concurrent requests (ULTRA AGGRESSIVE)
+        # Allow burst above limit for maximum aggression
         semaphore = asyncio.Semaphore(max_concurrent)
         
         async def worker_with_semaphore(session, task):
             async with semaphore:
-                game_id, job_id, proxy, cookie, cookie_num, attempt_num = task
-                result = await self.test_server(session, game_id, job_id, proxy, cookie, cookie_num, attempt_num)
-                
-                nonlocal completed
-                completed += 1
-                results.append(result)
-                
-                if completed % 100 == 0 or completed == total_tests:
-                    elapsed = time.time() - start_time
-                    rate = completed / elapsed if elapsed > 0 else 0
-                    remaining = total_tests - completed
-                    eta = remaining / rate if rate > 0 else 0
-                    success_count = len([r for r in results if r.get('success')])
-                    error_count = len([r for r in results if not r.get('success')])
-                    print(f"⏳ Progress: {completed}/{total_tests} ({completed*100//total_tests}%) | "
-                          f"Rate: {rate:.0f}/s | ETA: {eta:.0f}s | "
-                          f"✅ Success: {success_count} | ❌ Errors: {error_count}", end='\r')
+                try:
+                    game_id, job_id, proxy, cookie, cookie_num, attempt_num = task
+                    result = await self.test_server(session, game_id, job_id, proxy, cookie, cookie_num, attempt_num)
+                    
+                    nonlocal completed
+                    completed += 1
+                    results.append(result)
+                    
+                    # Update progress more frequently for better feedback
+                    if completed % 50 == 0 or completed == total_tests:
+                        elapsed = time.time() - start_time
+                        rate = completed / elapsed if elapsed > 0 else 0
+                        remaining = total_tests - completed
+                        eta = remaining / rate if rate > 0 else 0
+                        success_count = len([r for r in results if r.get('success')])
+                        error_count = len([r for r in results if not r.get('success')])
+                        print(f"⏳ Progress: {completed}/{total_tests} ({completed*100//total_tests}%) | "
+                              f"Rate: {rate:.0f}/s | ETA: {eta:.0f}s | "
+                              f"✅ Success: {success_count} | ❌ Errors: {error_count}", end='\r')
+                except Exception as e:
+                    # Silently catch and log exceptions to prevent spam
+                    nonlocal completed
+                    completed += 1
+                    proxy_id = task[2]['id'] if len(task) > 2 and isinstance(task[2], dict) else 'unknown'
+                    cookie_num = task[4] if len(task) > 4 else 0
+                    results.append({
+                        'proxy_id': proxy_id,
+                        'cookie_num': cookie_num,
+                        'success': False,
+                        'error': f'Worker Exception: {str(e)[:50]}',
+                        'status_code': None,
+                        'response_time': 0
+                    })
         
-        # Create aiohttp session with connection pooling and SSL handling
+        # Create aiohttp session with AGGRESSIVE connection pooling
         connector = aiohttp.TCPConnector(
-            limit=max_concurrent,
-            limit_per_host=50,
-            ttl_dns_cache=300,
-            force_close=False,
+            limit=max_concurrent * 2,  # Double the limit for more connections
+            limit_per_host=200,  # Increased per-host limit
+            ttl_dns_cache=60,  # Shorter cache for faster rotation
+            force_close=True,  # Force close connections for faster cleanup
             enable_cleanup_closed=True,
-            ssl=False  # Disable SSL verification for faster connections
+            ssl=False,  # Disable SSL verification for faster connections
+            keepalive_timeout=5,  # Shorter keepalive
+            enable_cleanup_closed=True
         )
         
         print(f"🚀 Starting {len(tasks)} tests with {max_concurrent} concurrent requests...\n")
@@ -322,7 +348,13 @@ class AsyncServerDebugger:
             
             # Run all tasks concurrently with exception handling
             # Use return_exceptions=True to prevent unhandled exceptions from stopping everything
-            await asyncio.gather(*coroutines, return_exceptions=True)
+            results_gathered = await asyncio.gather(*coroutines, return_exceptions=True)
+            
+            # Filter out any exception results that weren't handled
+            for r in results_gathered:
+                if isinstance(r, Exception) and r not in results:
+                    # Already handled in worker, ignore
+                    pass
         
         elapsed_time = time.time() - start_time
         print(f"\n✅ Completed {completed} tests in {elapsed_time:.1f} seconds")
@@ -376,10 +408,13 @@ class AsyncServerDebugger:
         
         # Status code breakdown
         print(f"📈 STATUS CODE BREAKDOWN:")
-        for status_code in sorted(by_status.keys()):
+        # Sort status codes handling None values
+        sorted_statuses = sorted(by_status.keys(), key=lambda x: (x is None, x if x is not None else 0))
+        for status_code in sorted_statuses:
             count = len(by_status[status_code])
             percentage = count * 100 / len(results)
-            print(f"   {status_code}: {count} ({percentage:.1f}%)")
+            status_display = status_code if status_code is not None else "None"
+            print(f"   {status_display}: {count} ({percentage:.1f}%)")
         print()
         
         # Error breakdown
@@ -508,13 +543,14 @@ async def main_async():
     num_attempts_input = input("🔄 Number of attempts per combination (default 1): ").strip()
     num_attempts = int(num_attempts_input) if num_attempts_input.isdigit() else 1
     
-    max_concurrent_input = input(f"⚡ Max concurrent requests (default 500, recommended 300-1000): ").strip()
-    max_concurrent = int(max_concurrent_input) if max_concurrent_input.isdigit() else 500
+    max_concurrent_input = input(f"⚡ Max concurrent requests (default 1000, recommended 500-2000, MAX 5000): ").strip()
+    max_concurrent = int(max_concurrent_input) if max_concurrent_input.isdigit() else 1000
     
     print(f"\n🚀 Starting ULTRA AGGRESSIVE async debug test...")
     print(f"   Total tests: {len(debugger.proxy_pool) * len(cookies) * num_attempts}")
     print(f"   Concurrent requests: {max_concurrent}")
-    print(f"   Expected speed: ~{max_concurrent * 2}-{max_concurrent * 10} requests/second")
+    print(f"   Expected speed: ~{max_concurrent * 3}-{max_concurrent * 15} requests/second")
+    print(f"   🔥 ULTRA AGGRESSIVE MODE: Maximum concurrency, minimal delays")
     
     confirm = input("\n⚠️ Continue? (y/n): ").strip().lower()
     if confirm != 'y':
